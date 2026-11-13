@@ -2266,7 +2266,21 @@ void handle_setpeers(rtsp_conn_info *conn, rtsp_message *req, rtsp_message *resp
     }
     plist_free(addresses_array);
   */
-  // set_client_as_ptp_clock(conn);
+  // The HomePod waits here for a PTP reply and does not open the audio stream
+  // until one arrives. Name the address that opened this connection. NQPTP
+  // answers an announce only from that address. Do not send B: a low-power
+  // client may still sleep its clock. A second T would clear the clock, so
+  // this runs once, and only while no session owns the player.
+  pthread_rwlock_wrlock(&principal_conn_lock);
+  pthread_cleanup_push(rwlock_unlock, (void *)&principal_conn_lock);
+  if ((conn->airplay_stream_category == ptp_stream) && (principal_conn == NULL) &&
+      (conn->setpeers_timing_started == 0)) {
+    conn->setpeers_timing_started = 1;
+    debug(2, "Connection %d: SETPEERS starting timing on %s.", conn->connection_number,
+          conn->client_ip_string);
+    set_client_as_ptp_clock(conn);
+  }
+  pthread_cleanup_pop(1); // release the principal_conn lock
   resp->respcode = 200;
 }
 void handle_setpeersx(rtsp_conn_info *conn, rtsp_message *req, rtsp_message *resp) {
@@ -2707,7 +2721,8 @@ void handle_setup_2(rtsp_conn_info *conn, rtsp_message *req, rtsp_message *resp)
       
       // airplay 2 always allows interruption, so should never return
       // play_lock_aquisition_failed
-      if (get_play_lock(conn, 1) != play_lock_aquisition_failed) {
+      play_lock_r play_status = get_play_lock(conn, 1);
+      if (play_status != play_lock_aquisition_failed) {
         debug(2, "Connection %d: %s AP2 setup -- play lock acquired.", conn->connection_number,
               get_category_string(conn->airplay_stream_category));
 
@@ -2721,7 +2736,11 @@ void handle_setup_2(rtsp_conn_info *conn, rtsp_message *req, rtsp_message *resp)
             0) // it should be open already, but just in case it isn't...
           die("Can not access the NQPTP service. Has it stopped running?");
 
-        set_client_as_ptp_clock(conn);
+        // SETPEERS may already have named this clock. T again would clear it.
+        // Breaking in still has to retarget. B belongs here, when the stream opens.
+        if ((conn->setpeers_timing_started == 0) ||
+            (play_status == play_lock_acquired_by_breaking_in))
+          set_client_as_ptp_clock(conn);
         ptp_send_control_message_string(
             "B"); // signify clock dependability period is "B"eginning (or continuing)
         plist_t stream0 = plist_array_get_item(streams, 0);

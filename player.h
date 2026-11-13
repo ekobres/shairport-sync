@@ -454,6 +454,7 @@ typedef struct {
   airplay_t airplay_type; // are we using AirPlay 1 or AirPlay 2 protocol on this connection?
   airplay_stream_t airplay_stream_type; // is it realtime audio or buffered audio...
   timing_t timing_type;                 // are we using NTP or PTP on this connection?
+  int setpeers_timing_started;          // SETPEERS has already named this connection's clock
 
   pthread_t *rtp_event_thread;
   pthread_t *rtp_data_thread;
